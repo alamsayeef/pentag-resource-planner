@@ -3,8 +3,8 @@
 body { font-family: "Outfit", system-ui, sans-serif; background-color: #f8faf9; color: #022020; }
 .page-wrap { max-width: 1280px; margin: 0 auto; padding: 1.25rem 0.5rem; }
 
-/* navbar in PenTAG dark teal */
-.navbar { background-color: #003c3c !important; }
+/* Sticky Navbar */
+.navbar { background-color: #003c3c !important; position: sticky !important; top: 0; z-index: 1030; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
 .navbar .navbar-brand, .navbar .nav-link { color: rgba(255,255,255,.75) !important; }
 .navbar .nav-link.active, .navbar .nav-link:hover { color: #fff !important; }
 .navbar .nav-link.active { font-weight: 600; border-bottom: 2px solid #00c896; }
@@ -54,3 +54,6 @@ table th { font-weight: 500; color: #4b5563; white-space: nowrap; }
 .rag-UNAVAILABLE { background: #e5e7eb; color: #6b7280; }
 .legend { display: flex; flex-wrap: wrap; gap: 1rem; padding: .75rem 1rem; font-size: .8rem; }
 .legend span { padding: .1rem .6rem; border-radius: 4px; }
+
+/* Button single line styling */
+.btn-single-line { white-space: nowrap; }

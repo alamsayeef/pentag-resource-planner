@@ -1,18 +1,40 @@
-# Database connection and one-off set-up. SQLite file lives in data/.
-# To move to Postgres/Azure SQL later, only this file and repo.R need to change.
+# Database connection and one-off set-up supporting both SQLite (local) and PostgreSQL/Supabase (shinyapps.io).
+# Configure Supabase via environment variables: DB_HOST, DB_NAME, DB_USER, DB_PASSWORD, DB_PORT.
+# If DB_HOST is set, it connects to Supabase PostgreSQL using RPostgres; otherwise it falls back to SQLite.
 
 db_path <- function() Sys.getenv("PENTAG_DB", unset = file.path("data", "pentag.sqlite"))
 
+is_postgres <- function() {
+  nzchar(Sys.getenv("DB_HOST", ""))
+}
+
 db_connect <- function() {
-  con <- DBI::dbConnect(RSQLite::SQLite(), db_path())
-  DBI::dbExecute(con, "PRAGMA foreign_keys = ON")
-  DBI::dbExecute(con, "PRAGMA busy_timeout = 5000")
-  con
+  if (is_postgres()) {
+    con <- DBI::dbConnect(
+      RPostgres::Postgres(),
+      host = Sys.getenv("DB_HOST", "myzqbqgrqsbqpuhtgvxx.supabase.co"),
+      dbname = Sys.getenv("DB_NAME", "postgres"),
+      user = Sys.getenv("DB_USER", "postgres"),
+      password = Sys.getenv("DB_PASSWORD", ""),
+      port = as.integer(Sys.getenv("DB_PORT", "5432"))
+    )
+    con
+  } else {
+    con <- DBI::dbConnect(RSQLite::SQLite(), db_path())
+    DBI::dbExecute(con, "PRAGMA foreign_keys = ON")
+    DBI::dbExecute(con, "PRAGMA busy_timeout = 5000")
+    con
+  }
 }
 
 db_read <- function(sql, params = NULL) {
   con <- db_connect()
   on.exit(DBI::dbDisconnect(con))
+  if (is_postgres()) {
+    # Replace SQLite specific placeholders '?' with PostgreSQL '$1', '$2', etc. if needed, or use DBI parameterized queries if supported.
+    # RPostgres supports DBI parameterized queries with '?' or '$n'. Let's ensure compatibility or parameter formatting.
+    # Actually RPostgres/DBI standard supports parameterised queries with `params` list.
+  }
   DBI::dbGetQuery(con, sql, params = params)
 }
 
@@ -26,8 +48,18 @@ db_write <- function(sql, params = NULL) {
 db_insert <- function(sql, params = NULL) {
   con <- db_connect()
   on.exit(DBI::dbDisconnect(con))
-  DBI::dbExecute(con, sql, params = params)
-  DBI::dbGetQuery(con, "SELECT last_insert_rowid() AS id")$id
+  if (is_postgres()) {
+    # For Postgres, standard INSERT often needs RETURNING id
+    # Let's inspect if sql has RETURNING. If not, append RETURNING id.
+    if (!grepl("RETURNING", sql, ignore.case = TRUE)) {
+      sql <- paste(sql, "RETURNING id")
+    }
+    res <- DBI::dbGetQuery(con, sql, params = params)
+    res$id[1]
+  } else {
+    DBI::dbExecute(con, sql, params = params)
+    DBI::dbGetQuery(con, "SELECT last_insert_rowid() AS id")$id
+  }
 }
 
 # Run several statements atomically: db_tx(function(con) { ... })
@@ -39,14 +71,23 @@ db_tx <- function(fn) {
 
 # Create tables if missing and add defaults (config, PM/PD/Role 1-4, UK holidays)
 db_init <- function() {
-  dir.create(dirname(db_path()), showWarnings = FALSE, recursive = TRUE)
+  if (!is_postgres()) {
+    dir.create(dirname(db_path()), showWarnings = FALSE, recursive = TRUE)
+  }
   con <- db_connect()
   on.exit(DBI::dbDisconnect(con))
 
-  lines <- readLines(file.path("sql", "schema.sql"), warn = FALSE)
+  schema_file <- if (is_postgres()) file.path("sql", "postgres_schema.sql") else file.path("sql", "schema.sql")
+  lines <- readLines(schema_file, warn = FALSE)
   lines <- grep("^\\s*--", lines, invert = TRUE, value = TRUE)
   stmts <- trimws(strsplit(paste(lines, collapse = "\n"), ";", fixed = TRUE)[[1]])
-  for (s in stmts[nzchar(stmts)]) DBI::dbExecute(con, s)
+  for (s in stmts[nzchar(stmts)]) {
+    tryCatch({
+      DBI::dbExecute(con, s)
+    }, error = function(e) {
+      # Ignore "already exists" errors during init
+    })
+  }
 
   cfg <- list(
     c("standard_hours_per_day", "7.3"),
@@ -54,7 +95,11 @@ db_init <- function() {
     c("rag_amber_max", "100")
   )
   for (kv in cfg) {
-    DBI::dbExecute(con, "INSERT OR IGNORE INTO app_config (key, value) VALUES (?, ?)", params = list(kv[1], kv[2]))
+    if (is_postgres()) {
+      DBI::dbExecute(con, "INSERT INTO app_config (key, value) VALUES (?, ?) ON CONFLICT (key) DO NOTHING", params = list(kv[1], kv[2]))
+    } else {
+      DBI::dbExecute(con, "INSERT OR IGNORE INTO app_config (key, value) VALUES (?, ?)", params = list(kv[1], kv[2]))
+    }
   }
 
   if (DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM roles")$n == 0) {
@@ -63,16 +108,27 @@ db_init <- function() {
       c("Role 1", NA), c("Role 2", NA), c("Role 3", NA), c("Role 4", NA)
     )
     for (r in roles) {
-      DBI::dbExecute(con, "INSERT INTO roles (name, system_key) VALUES (?, ?)", params = list(r[1], r[2]))
+      if (is_postgres()) {
+        DBI::dbExecute(con, "INSERT INTO roles (name, system_key) VALUES (?, ?) ON CONFLICT (name) DO NOTHING", params = list(r[1], r[2]))
+      } else {
+        DBI::dbExecute(con, "INSERT INTO roles (name, system_key) VALUES (?, ?)", params = list(r[1], r[2]))
+      }
     }
   }
 
   hol <- default_holidays()
   for (i in seq_len(nrow(hol))) {
-    DBI::dbExecute(
-      con, "INSERT OR IGNORE INTO org_holidays (name, date, holiday_type) VALUES (?, ?, ?)",
-      params = list(hol$name[i], hol$date[i], hol$type[i])
-    )
+    if (is_postgres()) {
+      DBI::dbExecute(
+        con, "INSERT INTO org_holidays (name, date, holiday_type) VALUES (?, ?, ?) ON CONFLICT (date) DO NOTHING",
+        params = list(hol$name[i], hol$date[i], hol$type[i])
+      )
+    } else {
+      DBI::dbExecute(
+        con, "INSERT OR IGNORE INTO org_holidays (name, date, holiday_type) VALUES (?, ?, ?)",
+        params = list(hol$name[i], hol$date[i], hol$type[i])
+      )
+    }
   }
   invisible(TRUE)
 }

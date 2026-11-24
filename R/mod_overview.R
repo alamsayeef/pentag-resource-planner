@@ -22,12 +22,13 @@ mod_overview_ui <- function(id) {
       class = "mb-3",
       card_header(
         div(
-          class = "d-flex justify-content-between align-items-center",
+          class = "d-flex justify-content-between align-items-center flex-wrap gap-2",
           h5(class = "mb-0", "Projects"),
           div(
-            actionButton(ns("add"), "+ Add project", class = "btn-primary btn-sm"),
-            actionButton(ns("edit"), "Edit selected", class = "btn-outline-secondary btn-sm"),
-            actionButton(ns("delete"), "Delete selected", class = "btn-outline-danger btn-sm")
+            class = "d-flex align-items-center gap-2",
+            actionButton(ns("add"), "+ Add project", class = "btn-primary btn-sm btn-single-line"),
+            actionButton(ns("edit"), "Edit selected", class = "btn-outline-secondary btn-sm btn-single-line"),
+            actionButton(ns("delete"), "Delete selected", class = "btn-outline-danger btn-sm btn-single-line")
           )
         )
       ),
@@ -143,12 +144,12 @@ mod_overview_server <- function(id, data_version) {
     project_modal <- function(title, p = NULL) {
       types <- repo_types()
       emps <- repo_employees()
-      people <- id_choices(emps, none = "\u2014 None \u2014")
+      people <- id_choices(emps, none = "— None —")
       modalDialog(
         title = title, easyClose = TRUE,
         textInput(ns("f_code"), "ID (letters and numbers only, optional)", value = p$code %or% ""),
         textInput(ns("f_name"), "Project title", value = p$name %or% ""),
-        selectInput(ns("f_type"), "Project type", choices = id_choices(types, none = "\u2014 None \u2014"),
+        selectInput(ns("f_type"), "Project type", choices = id_choices(types, none = "— None —"),
                     selected = as.character(p$project_type_id %or% "")),
         selectInput(ns("f_status"), "Status", choices = STATUSES, selected = p$status %or% "Incoming"),
         selectInput(ns("f_pm"), "PM", choices = people, selected = as.character(p$pm_id %or% "")),
@@ -199,50 +200,50 @@ mod_overview_server <- function(id, data_version) {
       }
     })
 
-    # ---- delete ----
     observeEvent(input$delete, {
       p <- selected_project()
       if (is.null(p)) return(showNotification("Select a project row first.", type = "warning"))
-      editing_id(p$id)
       showModal(modalDialog(
         title = "Delete project", easyClose = TRUE,
-        paste0("Delete \u201c", p$name, "\u201d and its role assignments? This cannot be undone."),
-        footer = tagList(modalButton("Cancel"), actionButton(ns("confirm_delete"), "Delete", class = "btn-danger"))
+        paste0("Are you sure you want to delete “", p$name, "”?"),
+        footer = tagList(modalButton("Cancel"), actionButton(ns("del_ok"), "Delete", class = "btn-danger"))
       ))
     })
-    observeEvent(input$confirm_delete, {
-      if (safe_run(repo_project_delete(editing_id()))) {
+    observeEvent(input$del_ok, {
+      p <- selected_project()
+      if (!is.null(p)) {
+        safe_run(repo_project_delete(p$id))
         removeModal()
         bump()
       }
     })
 
-    # ---- Gantt ----
-    output$gantt <- renderPlot(
-      {
-        p <- filtered()
-        validate(need(nrow(p) > 0, "No projects to display on the timeline."))
-        p$s <- as.Date(p$start_date)
-        p$e <- as.Date(p$end_date)
-        p <- p[order(p$s, p$id), , drop = FALSE]
-        t_start <- as.Date(format(min(p$s), "%Y-%m-01"))
-        t_end <- seq(t_start, by = "month", length.out = 13)[13] - 1
-        p <- p[p$e > t_start & p$s < t_end, , drop = FALSE]
-        validate(need(nrow(p) > 0, "No projects fall inside the 12-month window."))
-        p$s <- pmax(p$s, t_start)
-        p$e <- pmin(p$e, t_end)
-        p$y <- factor(p$id, levels = rev(p$id))
-        labels <- stats::setNames(p$name, p$id)
-        ggplot2::ggplot(p, ggplot2::aes(x = s, xend = e, y = y, yend = y, colour = status)) +
-          ggplot2::geom_segment(linewidth = 6, lineend = "round") +
-          ggplot2::scale_colour_manual(values = STATUS_COLOURS, name = NULL) +
-          ggplot2::scale_y_discrete(labels = labels) +
-          ggplot2::scale_x_date(limits = c(t_start, t_end), date_breaks = "1 month", date_labels = "%b %y") +
-          ggplot2::labs(x = NULL, y = NULL) +
-          ggplot2::theme_minimal(base_size = 13) +
-          ggplot2::theme(legend.position = "bottom", panel.grid.minor = ggplot2::element_blank())
-      },
-      height = function() max(220, 34 * nrow(filtered()) + 90)
-    )
+    # ---- Gantt chart ----
+    output$gantt <- renderPlot({
+      p <- filtered()
+      if (nrow(p) == 0) {
+        plot.new()
+        text(0.5, 0.5, "No projects match the filters.", cex = 1.2, col = "#6b7280")
+        return()
+      }
+      p <- p[order(p$start_date, p$id), , drop = FALSE]
+      p$label <- paste0(ifelse(is.na(p$code) | p$code == "", "", paste0(p$code, " — ")), p$name)
+      p$y <- rev(seq_len(nrow(p)))
+
+      par(mar = c(4, 16, 2, 2), bg = "#ffffff")
+      plot(
+        NA, xlim = range(c(as.Date(p$start_date), as.Date(p$end_date))),
+        ylim = c(0.5, nrow(p) + 0.5), yaxt = "n", xaxt = "n",
+        xlab = "", ylab = ""
+      )
+      axis(2, at = p$y, labels = p$label, las = 1, cex.axis = 0.85, col.axis = "#022020", tck = 0)
+      axis.Date(1, at = seq(min(as.Date(p$start_date)), max(as.Date(p$end_date)), by = "month"), format = "%b %y", cex.axis = 0.85)
+      grid(nx = NA, ny = NULL, col = "#e5e7eb")
+
+      for (i in seq_len(nrow(p))) {
+        col <- STATUS_COLOURS[[p$status[i]]] %or% "#007d69"
+        rect(as.Date(p$start_date[i]), p$y[i] - 0.25, as.Date(p$end_date[i]), p$y[i] + 0.25, col = col, border = NA, lwd = 1)
+      }
+    }, height = function() max(250, nrow(filtered()) * 30 + 60))
   })
 }

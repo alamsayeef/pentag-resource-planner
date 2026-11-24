@@ -4,6 +4,12 @@
 
 library(shiny)
 library(bslib)
+library(DBI)
+library(RPostgres)
+library(RSQLite)
+library(DT)
+library(openxlsx)
+library(readxl)
 
 db_init()
 
