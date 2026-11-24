@@ -7,3 +7,4 @@ data/*.sqlite-*
 backups/
 renv/library/
 rsconnect/
+.Renviron

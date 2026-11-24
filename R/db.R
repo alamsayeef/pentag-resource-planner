@@ -12,11 +12,11 @@ db_connect <- function() {
   if (is_postgres()) {
     con <- DBI::dbConnect(
       RPostgres::Postgres(),
-      host = Sys.getenv("DB_HOST", "myzqbqgrqsbqpuhtgvxx.supabase.co"),
-      dbname = Sys.getenv("DB_NAME", "postgres"),
-      user = Sys.getenv("DB_USER", "postgres"),
-      password = Sys.getenv("DB_PASSWORD", ""),
-      port = as.integer(Sys.getenv("DB_PORT", "5432"))
+      host = Sys.getenv("DB_HOST"),
+      dbname = Sys.getenv("DB_NAME"),
+      user = Sys.getenv("DB_USER"),
+      password = Sys.getenv("DB_PASSWORD"),
+      port = as.integer(Sys.getenv("DB_PORT"))
     )
     con
   } else {
@@ -30,11 +30,6 @@ db_connect <- function() {
 db_read <- function(sql, params = NULL) {
   con <- db_connect()
   on.exit(DBI::dbDisconnect(con))
-  if (is_postgres()) {
-    # Replace SQLite specific placeholders '?' with PostgreSQL '$1', '$2', etc. if needed, or use DBI parameterized queries if supported.
-    # RPostgres supports DBI parameterized queries with '?' or '$n'. Let's ensure compatibility or parameter formatting.
-    # Actually RPostgres/DBI standard supports parameterised queries with `params` list.
-  }
   DBI::dbGetQuery(con, sql, params = params)
 }
 
@@ -49,8 +44,6 @@ db_insert <- function(sql, params = NULL) {
   con <- db_connect()
   on.exit(DBI::dbDisconnect(con))
   if (is_postgres()) {
-    # For Postgres, standard INSERT often needs RETURNING id
-    # Let's inspect if sql has RETURNING. If not, append RETURNING id.
     if (!grepl("RETURNING", sql, ignore.case = TRUE)) {
       sql <- paste(sql, "RETURNING id")
     }
@@ -76,7 +69,7 @@ db_init <- function() {
   }
   con <- db_connect()
   on.exit(DBI::dbDisconnect(con))
-
+  
   schema_file <- if (is_postgres()) file.path("sql", "postgres_schema.sql") else file.path("sql", "schema.sql")
   lines <- readLines(schema_file, warn = FALSE)
   lines <- grep("^\\s*--", lines, invert = TRUE, value = TRUE)
@@ -88,7 +81,7 @@ db_init <- function() {
       # Ignore "already exists" errors during init
     })
   }
-
+  
   cfg <- list(
     c("standard_hours_per_day", "7.3"),
     c("rag_green_max", "80"),
@@ -96,12 +89,12 @@ db_init <- function() {
   )
   for (kv in cfg) {
     if (is_postgres()) {
-      DBI::dbExecute(con, "INSERT INTO app_config (key, value) VALUES (?, ?) ON CONFLICT (key) DO NOTHING", params = list(kv[1], kv[2]))
+      DBI::dbExecute(con, "INSERT INTO app_config (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING", params = list(kv[1], kv[2]))
     } else {
       DBI::dbExecute(con, "INSERT OR IGNORE INTO app_config (key, value) VALUES (?, ?)", params = list(kv[1], kv[2]))
     }
   }
-
+  
   if (DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM roles")$n == 0) {
     roles <- list(
       c("PM", "PM"), c("PD", "PD"),
@@ -109,18 +102,18 @@ db_init <- function() {
     )
     for (r in roles) {
       if (is_postgres()) {
-        DBI::dbExecute(con, "INSERT INTO roles (name, system_key) VALUES (?, ?) ON CONFLICT (name) DO NOTHING", params = list(r[1], r[2]))
+        DBI::dbExecute(con, "INSERT INTO roles (name, system_key) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING", params = list(r[1], r[2]))
       } else {
         DBI::dbExecute(con, "INSERT INTO roles (name, system_key) VALUES (?, ?)", params = list(r[1], r[2]))
       }
     }
   }
-
+  
   hol <- default_holidays()
   for (i in seq_len(nrow(hol))) {
     if (is_postgres()) {
       DBI::dbExecute(
-        con, "INSERT INTO org_holidays (name, date, holiday_type) VALUES (?, ?, ?) ON CONFLICT (date) DO NOTHING",
+        con, "INSERT INTO org_holidays (name, date, holiday_type) VALUES ($1, $2, $3) ON CONFLICT (date) DO NOTHING",
         params = list(hol$name[i], hol$date[i], hol$type[i])
       )
     } else {
