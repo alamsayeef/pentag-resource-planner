@@ -1,0 +1,9 @@
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+data/*.sqlite
+data/*.sqlite-*
+backups/
+renv/library/
+rsconnect/

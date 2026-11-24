@@ -1,0 +1,5 @@
+# Copy the database to backups/ with a timestamp.  source("scripts/backup_db.R")
+dir.create("backups", showWarnings = FALSE)
+dest <- file.path("backups", paste0("pentag-", format(Sys.time(), "%Y%m%d-%H%M"), ".sqlite"))
+file.copy(file.path("data", "pentag.sqlite"), dest)
+message("Backed up to ", dest)
